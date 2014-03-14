@@ -15,14 +15,14 @@
 #    along with this program; if not, write to the Free Software
 #    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
 
-import email
 import random
 import binascii
 import re
 import time
 from sys import exc_info
 from .Base import BaseFolder
-from offlineimap import imaputil, imaplibutil, OfflineImapError
+from offlineimap import imaputil, imaplibutil, emailutil, OfflineImapError
+from offlineimap import globals
 from offlineimap.imaplib2 import MonthNames
 
 
@@ -43,7 +43,7 @@ class IMAPFolder(BaseFolder):
 
         Prefer SELECT to EXAMINE if we can, since some servers
         (Courier) do not stabilize UID validity until the folder is
-        selected. 
+        selected.
         .. todo: Still valid? Needs verification
         :param: Enforce new SELECT even if we are on that folder already.
         :returns: raises :exc:`OfflineImapError` severity FOLDER on error"""
@@ -53,7 +53,7 @@ class IMAPFolder(BaseFolder):
             imapobj.select(self.getfullname(), readonly = True, force = force)
 
     def suggeststhreads(self):
-        return 1
+        return not globals.options.singlethreading
 
     def waitforthread(self):
         self.imapserver.connectionwait()
@@ -115,7 +115,7 @@ class IMAPFolder(BaseFolder):
             maxmsgid = max(long(msgid), maxmsgid)
         # Different number of messages than last time?
         if maxmsgid != statusfolder.getmessagecount():
-            return True      
+            return True
         return False
 
     def cachemessagelist(self):
@@ -430,21 +430,12 @@ class IMAPFolder(BaseFolder):
         :returns: string in the form of "DD-Mmm-YYYY HH:MM:SS +HHMM"
                   (including double quotes) or `None` in case of failure
                   (which is fine as value for append)."""
+
         if rtime is None:
-            message = email.message_from_string(content)
-            # parsedate returns a 9-tuple that can be passed directly to
-            # time.mktime(); Will be None if missing or not in a valid
-            # format.  Note that indexes 6, 7, and 8 of the result tuple are
-            # not usable.
-            datetuple = email.utils.parsedate(message.get('Date'))
-            if datetuple is None:
-                #could not determine the date, use the local time.
+            rtime = emailutil.get_message_date(content)
+            if rtime == None:
                 return None
-            #make it a real struct_time, so we have named attributes
-            datetuple = time.struct_time(datetuple)
-        else:
-            #rtime is set, use that instead
-            datetuple = time.localtime(rtime)
+        datetuple = time.localtime(rtime)
 
         try:
             # Check for invalid dates
@@ -525,7 +516,7 @@ class IMAPFolder(BaseFolder):
                     self.ui.debug('imap', 'savemessage: header is: %s: %s' %\
                                       (headername, headervalue))
                     content = self.savemessage_addheader(content, headername,
-                                                         headervalue)    
+                                                         headervalue)
                 if len(content)>200:
                     dbg_output = "%s...%s" % (content[:150], content[-50:])
                 else:
@@ -569,7 +560,7 @@ class IMAPFolder(BaseFolder):
                     imapobj = self.imapserver.acquireconnection()
                     if not retry_left:
                         raise OfflineImapError("Saving msg in folder '%s', "
-                              "repository '%s' failed (abort). Server reponded: %s\n"
+                              "repository '%s' failed (abort). Server responded: %s\n"
                               "Message content was: %s" %
                               (self, self.getrepository(), str(e), dbg_output),
                                                OfflineImapError.ERROR.MESSAGE)
@@ -581,7 +572,7 @@ class IMAPFolder(BaseFolder):
                     self.imapserver.releaseconnection(imapobj, True)
                     imapobj = None
                     raise OfflineImapError("Saving msg folder '%s', repo '%s'"
-                        "failed (error). Server reponded: %s\nMessage content was: "
+                        "failed (error). Server responded: %s\nMessage content was: "
                         "%s" % (self, self.getrepository(), str(e), dbg_output),
                                            OfflineImapError.ERROR.MESSAGE)
             # Checkpoint. Let it write out stuff, etc. Eg searches for
@@ -723,11 +714,11 @@ class IMAPFolder(BaseFolder):
     def change_message_uid(self, uid, new_uid):
         """Change the message from existing uid to new_uid
 
-        If the backend supports it. IMAP does not and will throw errors.""" 
+        If the backend supports it. IMAP does not and will throw errors."""
         raise OfflineImapError('IMAP backend cannot change a messages UID from '
                                '%d to %d' % (uid, new_uid),
                                OfflineImapError.ERROR.MESSAGE)
-        
+
     def deletemessage(self, uid):
         self.deletemessages_noconvert([uid])
 
