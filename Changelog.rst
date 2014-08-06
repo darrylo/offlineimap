@@ -4,6 +4,47 @@ ChangeLog
 
 :website: http://offlineimap.org
 
+
+OfflineIMAP v6.5.6.1 (YYYY-MM-DD)
+=================================
+
+* Fix mangled message headers for servers without UIDPLUS:
+  X-OfflineIMAP was added with preceeding '\n' instead of
+  '\r\n' just before message was uploaded to the IMAP server.
+
+* Add missing version bump for 6.5.6 (it was released with
+  6.5.5 in setup.py and other places).
+
+* Various fixes in documentation.
+
+
+OfflineIMAP v6.5.6 (2014-05-14)
+===============================
+
+* Fix IDLE mode regression (it didn't worked) introduced
+  after v6.5.5 (pointy hat goes to Eygene Ryabinkin, kudos --
+  to Tomasz Żok)
+
+
+OfflineIMAP v6.5.6-RC1 (2014-05-14)
+===================================
+
+* Add knob to invoke folderfilter dynamically on each sync (GitHub#73)
+* Add knob to apply compression to IMAP connections (Abdó Roig-Maranges)
+* Add knob to filter some headers before uploading message
+  to IMAP server (Abdó Roig-Maranges)
+* Allow to sync GMail labels and implement GmailMaildir repository that
+  adds mechanics to change message labels (Abdó Roig-Maranges)
+* Allow to migrate status data across differend backends
+  (Abdó Roig-Maranges)
+* Support XDG Base Directory Specification
+  (if $XDG_CONFIG_HOME/offlineimap/config exists, use it as the
+  default configuration path; ~/.offlineimaprc is still tried after
+  XDG location) (GitHub#32)
+* Allow multiple certificate fingerprints to be specified inside
+  'cert_fingerprint'
+
+
 OfflineIMAP v6.5.5 (2013-10-07)
 ===============================
 

@@ -19,6 +19,7 @@ import socket
 import time
 import re
 import os
+import tempfile
 from .Base import BaseFolder
 from threading import Lock
 
@@ -43,7 +44,7 @@ timeseq = 0
 lasttime = 0
 timelock = Lock()
 
-def gettimeseq():
+def _gettimeseq():
     global lasttime, timeseq, timelock
     timelock.acquire()
     try:
@@ -79,10 +80,12 @@ class MaildirFolder(BaseFolder):
         # Cache the full folder path, as we use getfullname() very often
         self._fullname = os.path.join(self.getroot(), self.getname())
 
+    # Interface from BaseFolder
     def getfullname(self):
         """Return the absolute file path to the Maildir folder (sans cur|new)"""
         return self._fullname
 
+    # Interface from BaseFolder
     def get_uidvalidity(self):
         """Retrieve the current connections UIDVALIDITY value
 
@@ -191,6 +194,7 @@ class MaildirFolder(BaseFolder):
             retval[uid] = {'flags': flags, 'filename': filepath}
         return retval
 
+    # Interface from BaseFolder
     def quickchanged(self, statusfolder):
         """Returns True if the Maildir has changed"""
         self.cachemessagelist()
@@ -204,13 +208,16 @@ class MaildirFolder(BaseFolder):
                 return True
         return False  #Nope, nothing changed
 
+    # Interface from BaseFolder
     def cachemessagelist(self):
         if self.messagelist is None:
             self.messagelist = self._scanfolder()
 
+    # Interface from BaseFolder
     def getmessagelist(self):
         return self.messagelist
 
+    # Interface from BaseFolder
     def getmessage(self, uid):
         """Return the content of the message"""
         filename = self.messagelist[uid]['filename']
@@ -222,6 +229,7 @@ class MaildirFolder(BaseFolder):
         #      read it as text?
         return retval.replace("\r\n", "\n")
 
+    # Interface from BaseFolder
     def getmessagetime(self, uid):
         filename = self.messagelist[uid]['filename']
         filepath = os.path.join(self.getfullname(), filename)
@@ -233,11 +241,58 @@ class MaildirFolder(BaseFolder):
         :param uid: The UID`None`, or a set of maildir flags
         :param flags: A set of maildir flags
         :returns: String containing unique message filename"""
-        timeval, timeseq = gettimeseq()
+        timeval, timeseq = _gettimeseq()
         return '%d_%d.%d.%s,U=%d,FMD5=%s%s2,%s' % \
             (timeval, timeseq, os.getpid(), socket.gethostname(),
              uid, self._foldermd5, self.infosep, ''.join(sorted(flags)))
 
+
+    def save_to_tmp_file(self, filename, content):
+        """
+        Saves given content to the named temporary file in the
+        'tmp' subdirectory of $CWD.
+
+        Arguments:
+        - filename: name of the temporary file;
+        - content: data to be saved.
+
+        Returns: relative path to the temporary file
+        that was created.
+
+        """
+
+        tmpname = os.path.join('tmp', filename)
+        # open file and write it out
+        tries = 7
+        while tries:
+            tries = tries - 1
+            try:
+                fd = os.open(os.path.join(self.getfullname(), tmpname),
+                             os.O_EXCL|os.O_CREAT|os.O_WRONLY, 0o666)
+                break
+            except OSError as e:
+                if e.errno == e.EEXIST:
+                    if tries:
+                        time.sleep(0.23)
+                        continue
+                    severity = OfflineImapError.ERROR.MESSAGE
+                    raise OfflineImapError("Unique filename %s already exists." % \
+                      filename, severity)
+                else:
+                    raise
+
+        fd = os.fdopen(fd, 'wt')
+        fd.write(content)
+        # Make sure the data hits the disk
+        fd.flush()
+        if self.dofsync:
+            os.fsync(fd)
+        fd.close()
+
+        return tmpname
+
+
+    # Interface from BaseFolder
     def savemessage(self, uid, content, flags, rtime):
         """Writes a new message, with the specified uid.
 
@@ -260,40 +315,21 @@ class MaildirFolder(BaseFolder):
         # to give it a permanent home.
         tmpdir = os.path.join(self.getfullname(), 'tmp')
         messagename = self.new_message_filename(uid, flags)
-        # open file and write it out
-        try:
-            fd = os.open(os.path.join(tmpdir, messagename),
-                           os.O_EXCL|os.O_CREAT|os.O_WRONLY, 0o666)
-        except OSError as e:
-            if e.errno == 17:
-                #FILE EXISTS ALREADY
-                severity = OfflineImapError.ERROR.MESSAGE
-                raise OfflineImapError("Unique filename %s already existing." %\
-                                           messagename, severity)
-            else:
-                raise
-
-        file = os.fdopen(fd, 'wt')
-        file.write(content)
-        # Make sure the data hits the disk
-        file.flush()
-        if self.dofsync:
-            os.fsync(fd)
-        file.close()
-
+        tmpname = self.save_to_tmp_file(messagename, content)
         if rtime != None:
-            os.utime(os.path.join(tmpdir, messagename), (rtime, rtime))
+            os.utime(os.path.join(self.getfullname(), tmpname), (rtime, rtime))
 
-        self.messagelist[uid] = {'flags': flags,
-                                 'filename': os.path.join('tmp', messagename)}
+        self.messagelist[uid] = {'flags': flags, 'filename': tmpname}
         # savemessageflags moves msg to 'cur' or 'new' as appropriate
         self.savemessageflags(uid, flags)
         self.ui.debug('maildir', 'savemessage: returning uid %d' % uid)
         return uid
 
+    # Interface from BaseFolder
     def getmessageflags(self, uid):
         return self.messagelist[uid]['flags']
 
+    # Interface from BaseFolder
     def savemessageflags(self, uid, flags):
         """Sets the specified message's flags to the given set.
 
@@ -331,6 +367,7 @@ class MaildirFolder(BaseFolder):
             self.messagelist[uid]['flags'] = flags
             self.messagelist[uid]['filename'] = newfilename
 
+    # Interface from BaseFolder
     def change_message_uid(self, uid, new_uid):
         """Change the message from existing uid to new_uid
 
@@ -345,12 +382,15 @@ class MaildirFolder(BaseFolder):
         oldfilename = self.messagelist[uid]['filename']
         dir_prefix, filename = os.path.split(oldfilename)
         flags = self.getmessageflags(uid)
-        filename = self.new_message_filename(new_uid, flags)
+        newfilename = os.path.join(dir_prefix,
+          self.new_message_filename(new_uid, flags))
         os.rename(os.path.join(self.getfullname(), oldfilename),
-                  os.path.join(self.getfullname(), dir_prefix, filename))
+                  os.path.join(self.getfullname(), newfilename))
         self.messagelist[new_uid] = self.messagelist[uid]
+        self.messagelist[new_uid]['filename'] = newfilename
         del self.messagelist[uid]
 
+    # Interface from BaseFolder
     def deletemessage(self, uid):
         """Unlinks a message file from the Maildir.
 
@@ -375,4 +415,3 @@ class MaildirFolder(BaseFolder):
                 os.unlink(filepath)
             # Yep -- return.
         del(self.messagelist[uid])
-

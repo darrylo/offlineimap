@@ -21,7 +21,13 @@ import string
 from offlineimap.ui import getglobalui
 
 
-def debug(*args):
+## Globals
+
+# Message headers that use space as the separator (for label storage)
+SPACE_SEPARATED_LABEL_HEADERS = ('X-Label', 'Keywords')
+
+
+def __debug(*args):
     msg = []
     for arg in args:
         msg.append(str(arg))
@@ -39,6 +45,16 @@ def dequote(string):
         string = string.replace('\\\\', '\\')
     return string
 
+def quote(string):
+    """Takes an unquoted string and quotes it.
+
+    It only adds double quotes. This function does NOT consider
+    parenthised lists to be quoted.
+    """
+    string = string.replace('"', '\\"')
+    string = string.replace('\\', '\\\\')
+    return '"%s"' % string
+
 def flagsplit(string):
     """Converts a string of IMAP flags to a list
 
@@ -50,7 +66,7 @@ def flagsplit(string):
         raise ValueError("Passed string '%s' is not a flag list" % string)
     return imapsplit(string[1:-1])
 
-def options2hash(list):
+def __options2hash(list):
     """convert list [1,2,3,4,5,6] to {1:2, 3:4, 5:6}"""
     # effectively this does dict(zip(l[::2],l[1::2])), however
     # measurements seemed to have indicated that the manual variant is
@@ -60,7 +76,7 @@ def options2hash(list):
     while (counter < len(list)):
         retval[list[counter]] = list[counter + 1]
         counter += 2
-    debug("options2hash returning:", retval)
+    __debug("__options2hash returning:", retval)
     return retval
 
 def flags2hash(flags):
@@ -68,7 +84,7 @@ def flags2hash(flags):
 
     E.g. '(FLAGS (\\Seen Old) UID 4807)' leads to
     {'FLAGS': '(\\Seen Old)', 'UID': '4807'}"""
-    return options2hash(flagsplit(flags))
+    return __options2hash(flagsplit(flags))
 
 def imapsplit(imapstring):
     """Takes a string from an IMAP conversation and returns a list containing
@@ -81,7 +97,7 @@ def imapsplit(imapstring):
     ['(\\HasNoChildren)', '"."', '"INBOX.Sent"']"""
 
     if not isinstance(imapstring, basestring):
-        debug("imapsplit() got a non-string input; working around.")
+        __debug("imapsplit() got a non-string input; working around.")
         # Sometimes, imaplib will throw us a tuple if the input
         # contains a literal.  See Python bug
         # #619732 at https://sourceforge.net/tracker/index.php?func=detail&aid=619732&group_id=5470&atid=105470
@@ -103,7 +119,7 @@ def imapsplit(imapstring):
                 arg = arg.replace('\\', '\\\\')
                 arg = arg.replace('"', '\\"')
                 arg = '"%s"' % arg
-                debug("imapsplit() non-string [%d]: Appending %s" %\
+                __debug("imapsplit() non-string [%d]: Appending %s" %\
                       (i, arg))
                 retval.append(arg)
             else:
@@ -113,10 +129,10 @@ def imapsplit(imapstring):
                 # Recursion to the rescue.
                 arg = imapstring[i]
                 arg = re.sub('\{\d+\}$', '', arg)
-                debug("imapsplit() non-string [%d]: Feeding %s to recursion" %\
+                __debug("imapsplit() non-string [%d]: Feeding %s to recursion" %\
                       (i, arg))
                 retval.extend(imapsplit(arg))
-        debug("imapsplit() non-string: returning %s" % str(retval))
+        __debug("imapsplit() non-string: returning %s" % str(retval))
         return retval
 
     workstr = imapstring.strip()
@@ -137,7 +153,7 @@ def imapsplit(imapstring):
             retval.append(parenlist)
         elif workstr[0] == '"':
             # quoted fragments '"...\"..."'
-            (quoted, rest) = _split_quoted(workstr)
+            (quoted, rest) = __split_quoted(workstr)
             retval.append(quoted)
             workstr = rest
         else:
@@ -213,7 +229,7 @@ def uid_sequence(uidlist):
     return ",".join(retval)
 
 
-def _split_quoted(string):
+def __split_quoted(string):
 	"""
 	Looks for the ending quote character in the string that starts
 	with quote character, splitting out quoted component and the
@@ -250,3 +266,69 @@ def _split_quoted(string):
 		rest = rest[next_q + 1:]
 		if not is_escaped:
 			return (quoted, rest.lstrip())
+
+
+def format_labels_string(header, labels):
+    """
+    Formats labels for embedding into a message,
+    with format according to header name.
+    
+    Headers from SPACE_SEPARATED_LABEL_HEADERS keep space-separated list
+    of labels, the rest uses comma (',') as the separator.
+
+    Also see parse_labels_string() and modify it accordingly
+    if logics here gets changed.
+
+    """
+    if header in SPACE_SEPARATED_LABEL_HEADERS:
+        sep = ' '
+    else:
+        sep = ','
+
+    return sep.join(labels)
+
+
+def parse_labels_string(header, labels_str):
+    """
+    Parses a string into a set of labels, with a format according to
+    the name of the header.
+
+    See __format_labels_string() for explanation on header handling
+    and keep these two functions synced with each other.
+
+    TODO: add test to ensure that
+      format_labels_string * parse_labels_string is unity
+    and
+      parse_labels_string * format_labels_string is unity
+
+    """
+
+    if header in SPACE_SEPARATED_LABEL_HEADERS:
+        sep = ' '
+    else:
+        sep = ','
+
+    labels = labels_str.strip().split(sep)
+
+    return set([l.strip() for l in labels if l.strip()])
+
+
+def labels_from_header(header_name, header_value):
+    """
+    Helper that builds label set from the corresponding header value.
+
+    Arguments:
+    - header_name: name of the header that keeps labels;
+    - header_value: value of the said header, can be None
+
+    Returns: set of labels parsed from the header (or empty set).
+
+    """
+
+    if header_value:
+        labels = parse_labels_string(header_name, header_value)
+    else:
+        labels = set()
+
+    return labels
+

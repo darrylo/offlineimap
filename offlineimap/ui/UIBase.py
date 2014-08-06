@@ -95,7 +95,7 @@ class UIBase(object):
         # write out more verbose initial info blurb on the log file
         p_ver = ".".join([str(x) for x in sys.version_info[0:3]])
         msg = "OfflineImap %s starting...\n  Python: %s Platform: %s\n  "\
-              "Args: %s" % (offlineimap.__version__, p_ver, sys.platform,
+              "Args: %s" % (offlineimap.__bigversion__, p_ver, sys.platform,
                             " ".join(sys.argv))
         self.logger.info(msg)
 
@@ -254,6 +254,15 @@ class UIBase(object):
                   "for that message." % (
                 str(uidlist), self.getnicename(destfolder), destfolder))
 
+    def labelstoreadonly(self, destfolder, uidlist, labels):
+        if self.config.has_option('general', 'ignore-readonly') and \
+                self.config.getboolean('general', 'ignore-readonly'):
+            return
+        self.warn("Attempted to modify labels for messages %s in folder %s[%s], "
+                  "but that folder is read-only.  No labels have been modified "
+                  "for that message." % (
+                str(uidlist), self.getnicename(destfolder), destfolder))
+
     def deletereadonly(self, destfolder, uidlist):
         if self.config.has_option('general', 'ignore-readonly') and \
                 self.config.getboolean('general', 'ignore-readonly'):
@@ -361,6 +370,25 @@ class UIBase(object):
         self.logger.info("Deleting flag %s from %d messages on %s" % (
                 ", ".join(flags), len(uidlist), dest))
 
+    def addinglabels(self, uidlist, label, dest):
+        self.logger.info("Adding label %s to %d messages on %s" % (
+                label, len(uidlist), dest))
+
+    def deletinglabels(self, uidlist, label, dest):
+        self.logger.info("Deleting label %s from %d messages on %s" % (
+                label, len(uidlist), dest))
+
+    def settinglabels(self, uid, num, num_to_set, labels, dest):
+        self.logger.info("Setting labels to message %d on %s (%d of %d): %s" % (
+                uid, dest, num, num_to_set, ", ".join(labels)))
+
+    def collectingdata(self, uidlist, source):
+      if uidlist:
+        self.logger.info("Collecting data from %d messages on %s" % (
+                len(uidlist), source))
+      else:
+        self.logger.info("Collecting data from messages on %s" % source)
+
     def serverdiagnostics(self, repository, type):
         """Connect to repository and output useful information for debugging"""
         conn = None
@@ -381,7 +409,7 @@ class UIBase(object):
                         #TODO: Debug and make below working, it hangs Gmail
                         #res_type, response = conn.id((
                         #    'name', offlineimap.__productname__,
-                        #    'version', offlineimap.__version__))
+                        #    'version', offlineimap.__bigversion__))
                         #self._msg("Server ID: %s %s" % (res_type, response[0]))
                     self._msg("Server welcome string: %s" % str(conn.welcome))
                     self._msg("Server capabilities: %s\n" % str(conn.capabilities))

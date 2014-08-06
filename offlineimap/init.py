@@ -43,14 +43,14 @@ class OfflineImap:
     def run(self):
         """Parse the commandline and invoke everything"""
         # next line also sets self.config and self.ui
-        options, args = self.parse_cmd_options()
+        options, args = self.__parse_cmd_options()
         if options.diagnostics:
-            self.serverdiagnostics(options)
+            self.__serverdiagnostics(options)
         else:
-            self.sync(options)
+            self.__sync(options)
 
-    def parse_cmd_options(self):
-        parser = OptionParser(version=offlineimap.__version__,
+    def __parse_cmd_options(self):
+        parser = OptionParser(version=offlineimap.__bigversion__,
                               description="%s.\n\n%s" %
                               (offlineimap.__copyright__,
                                offlineimap.__license__))
@@ -101,9 +101,8 @@ class OfflineImap:
               "or to sync some accounts that you normally prefer not to.")
 
         parser.add_option("-c", dest="configfile", metavar="FILE",
-                  default="~/.offlineimaprc",
-                  help="Specifies a configuration file to use in lieu of "
-                       "%default.")
+                  default=None,
+                  help="Specifies a configuration file to use")
 
         parser.add_option("-d", dest="debugtype", metavar="type1,[type2...]",
                   help="Enables debugging for OfflineIMAP. This is useful "
@@ -165,7 +164,19 @@ class OfflineImap:
         globals.set_options (options)
 
         #read in configuration file
-        configfilename = os.path.expanduser(options.configfile)
+        if not options.configfile:
+            # Try XDG location, then fall back to ~/.offlineimaprc
+            xdg_var = 'XDG_CONFIG_HOME'
+            if not xdg_var in os.environ or not os.environ[xdg_var]:
+                xdg_home = os.path.expanduser('~/.config')
+            else:
+                xdg_home = os.environ[xdg_var]
+            options.configfile = os.path.join(xdg_home, "offlineimap", "config")
+            if not os.path.exists(options.configfile):
+                options.configfile = os.path.expanduser('~/.offlineimaprc')
+            configfilename = options.configfile
+        else:
+            configfilename = os.path.expanduser(options.configfile)
 
         config = CustomConfigParser()
         if not os.path.exists(configfilename):
@@ -300,7 +311,7 @@ class OfflineImap:
         self.config = config
         return (options, args)
 
-    def sync(self, options):
+    def __sync(self, options):
         """Invoke the correct single/multithread syncing
 
         self.config is supposed to have been correctly initialized
@@ -363,7 +374,7 @@ class OfflineImap:
 
             if options.singlethreading:
                 #singlethreaded
-                self.sync_singlethreaded(syncaccounts)
+                self.__sync_singlethreaded(syncaccounts)
             else:
                 # multithreaded
                 t = threadutil.ExitNotifyThread(target=syncmaster.syncitall,
@@ -379,7 +390,7 @@ class OfflineImap:
             self.ui.error(e)
             self.ui.terminate()
 
-    def sync_singlethreaded(self, accs):
+    def __sync_singlethreaded(self, accs):
         """Executed if we do not want a separate syncmaster thread
 
         :param accs: A list of accounts that should be synced
@@ -390,7 +401,7 @@ class OfflineImap:
             threading.currentThread().name = "Account sync %s" % accountname
             account.syncrunner()
 
-    def serverdiagnostics(self, options):
+    def __serverdiagnostics(self, options):
         activeaccounts = self.config.get("general", "accounts")
         if options.accounts:
             activeaccounts = options.accounts

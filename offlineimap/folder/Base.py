@@ -33,12 +33,10 @@ class BaseFolder(object):
         :para repository: Repository() in which the folder is.
         """
         self.ui = getglobalui()
-        """Should this folder be included in syncing?"""
-        self._sync_this = repository.should_sync_folder(name)
-        if not self._sync_this:
-            self.ui.debug('', "Filtering out '%s'[%s] due to folderfilter" \
-                          % (name, repository))
+        # Save original name for folderfilter operations
+        self.ffilter_name = name
         # Top level dir name is always ''
+        self.root = None
         self.name = name if not name == self.getsep() else ''
         self.repository = repository
         self.visiblename = repository.nametrans(name)
@@ -47,6 +45,7 @@ class BaseFolder(object):
         # return for the top-level dir.
         if self.visiblename == self.getsep():
             self.visiblename = ''
+
         self.config = repository.getconfig()
         utime_from_message_global = \
           self.config.getdefaultboolean("general",
@@ -55,6 +54,23 @@ class BaseFolder(object):
         self._utime_from_message = \
           self.config.getdefaultboolean(repo,
           "utime_from_message", utime_from_message_global)
+
+        # Determine if we're running static or dynamic folder filtering
+        # and check filtering status
+        self._dynamic_folderfilter = \
+          self.config.getdefaultboolean(repo, "dynamic_folderfilter", False)
+        self._sync_this = repository.should_sync_folder(self.ffilter_name)
+        if self._dynamic_folderfilter:
+            self.ui.debug('', "Running dynamic folder filtering on '%s'[%s]" \
+                          % (self.ffilter_name, repository))
+        elif not self._sync_this:
+            self.ui.debug('', "Filtering out '%s'[%s] due to folderfilter" \
+                          % (self.ffilter_name, repository))
+
+        # Passes for syncmessagesto
+        self.syncmessagesto_passes = [('copying messages'       , self.__syncmessagesto_copy),
+                                      ('deleting messages'      , self.__syncmessagesto_delete),
+                                      ('syncing flags'          , self.__syncmessagesto_flags)]
 
     def getname(self):
         """Returns name"""
@@ -71,7 +87,10 @@ class BaseFolder(object):
     @property
     def sync_this(self):
         """Should this folder be synced or is it e.g. filtered out?"""
-        return self._sync_this
+        if not self._dynamic_folderfilter:
+            return self._sync_this
+        else:
+            return self.repository.should_sync_folder(self.ffilter_name)
 
     @property
     def utime_from_message(self):
@@ -82,10 +101,26 @@ class BaseFolder(object):
         false otherwise.  Probably only IMAP will return true."""
         return 0
 
+    def waitforthread(self):
+        """Implements method that waits for thread to be usable.
+        Should be implemented only for folders that suggest threads."""
+        raise NotImplementedError
+
+    # XXX: we may need someting like supports_quickstatus() to check
+    # XXX: if user specifies 'quick' flag for folder that doesn't
+    # XXX: support quick status queries, so one believes that quick
+    # XXX: status checks will be done, but it won't really be so.
+    def quickchanged(self, statusfolder):
+        """ Runs quick check for folder changes and returns changed
+        status: True -- changed, False -- not changed.
+        :param statusfolder: keeps track of the last known folder state.
+        """
+        return True
+
     def getcopyinstancelimit(self):
         """For threading folders, returns the instancelimitname for
         InstanceLimitedThreads."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def storesmessages(self):
         """Should be true for any backend that actually saves message bodies.
@@ -96,6 +131,13 @@ class BaseFolder(object):
     def getvisiblename(self):
         """The nametrans-transposed name of the folder's name"""
         return self.visiblename
+
+    def getexplainedname(self):
+        """ Name that shows both real and nametrans-mangled values"""
+        if self.name == self.visiblename:
+            return self.name
+        else:
+            return "%s [remote name %s]" % (self.visiblename, self.name)
 
     def getrepository(self):
         """Returns the repository object that this folder is within."""
@@ -181,18 +223,18 @@ class BaseFolder(object):
 
         This function needs to be implemented by each Backend
         :returns: UIDVALIDITY as a (long) number"""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def cachemessagelist(self):
         """Reads the message list from disk or network and stores it in
         memory for later use.  This list will not be re-read from disk or
         memory unless this function is called again."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def getmessagelist(self):
         """Gets the current message list.
         You must call cachemessagelist() before calling this function!"""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def uidexists(self, uid):
         """Returns True if uid exists"""
@@ -209,7 +251,7 @@ class BaseFolder(object):
 
     def getmessage(self, uid):
         """Returns the content of the specified message."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def savemessage(self, uid, content, flags, rtime):
         """Writes a new message, with the specified uid.
@@ -233,15 +275,19 @@ class BaseFolder(object):
         so you need to ensure that savemessage is never called in a
         dryrun mode.
         """
-        raise NotImplementedException
+        raise NotImplementedError
 
     def getmessagetime(self, uid):
         """Return the received time for the specified message."""
-        raise NotImplementedException
+        raise NotImplementedError
+
+    def getmessagemtime(self, uid):
+        """Returns the message modification time of the specified message."""
+        raise NotImplementedError
 
     def getmessageflags(self, uid):
         """Returns the flags for the specified message."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def savemessageflags(self, uid, flags):
         """Sets the specified message's flags to the given set.
@@ -249,7 +295,7 @@ class BaseFolder(object):
         Note that this function does not check against dryrun settings,
         so you need to ensure that it is never called in a
         dryrun mode."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def addmessageflags(self, uid, flags):
         """Adds the specified flags to the message's flag set.  If a given
@@ -289,6 +335,231 @@ class BaseFolder(object):
         for uid in uidlist:
             self.deletemessageflags(uid, flags)
 
+
+    def getmessagelabels(self, uid):
+        """Returns the labels for the specified message."""
+        raise NotImplementedError
+
+    def savemessagelabels(self, uid, labels, ignorelabels=set(), mtime=0):
+        """Sets the specified message's labels to the given set.
+
+        Note that this function does not check against dryrun settings,
+        so you need to ensure that it is never called in a
+        dryrun mode."""
+        raise NotImplementedError
+
+    def addmessagelabels(self, uid, labels):
+        """Adds the specified labels to the message's labels set.  If a given
+        label is already present, it will not be duplicated.
+
+        Note that this function does not check against dryrun settings,
+        so you need to ensure that it is never called in a
+        dryrun mode.
+
+        :param labels: A set() of labels"""
+        newlabels = self.getmessagelabels(uid) | labels
+        self.savemessagelabels(uid, newlabels)
+
+    def addmessageslabels(self, uidlist, labels):
+        """
+        Note that this function does not check against dryrun settings,
+        so you need to ensure that it is never called in a
+        dryrun mode."""
+        for uid in uidlist:
+            self.addmessagelabels(uid, labels)
+
+    def deletemessagelabels(self, uid, labels):
+        """Removes each label given from the message's label set.  If a given
+        label is already removed, no action will be taken for that label.
+
+        Note that this function does not check against dryrun settings,
+        so you need to ensure that it is never called in a
+        dryrun mode."""
+        newlabels = self.getmessagelabels(uid) - labels
+        self.savemessagelabels(uid, newlabels)
+
+    def deletemessageslabels(self, uidlist, labels):
+        """
+        Note that this function does not check against dryrun settings,
+        so you need to ensure that it is never called in a
+        dryrun mode."""
+        for uid in uidlist:
+            self.deletemessagelabels(uid, labels)
+
+    def addmessageheader(self, content, linebreak, headername, headervalue):
+        """
+        Adds new header to the provided message.
+
+        Arguments:
+        - content: message content, headers and body as a single string
+        - linebreak: string that carries line ending
+        - headername: name of the header to add
+        - headervalue: value of the header to add
+
+        This has to deal with strange corner cases where the header is
+        missing or empty.  Here are illustrations for all the cases,
+        showing where the header gets inserted and what the end result
+        is.  In each illustration, '+' means the added contents.  Note
+        that these examples assume LF for linebreak, not CRLF, so '\n'
+        denotes a linebreak and '\n\n' corresponds to the transition
+        between header and body.  However if the linebreak parameter
+        is set to '\r\n' then you would have to substitute '\r\n' for
+        '\n' in the below examples.
+
+          * Case 1: No '\n\n', leading '\n'
+
+            +X-Flying-Pig-Header: i am here\n
+            \n
+            This is the body\n
+            next line\n
+
+          * Case 2: '\n\n' at position 0
+
+            +X-Flying-Pig-Header: i am here
+            \n
+            \n
+            This is the body\n
+            next line\n
+
+          * Case 3: No '\n\n', no leading '\n'
+
+            +X-Flying-Pig-Header: i am here\n
+            +\n
+            This is the body\n
+            next line\n
+
+          * Case 4: '\n\n' at non-zero position
+
+            Subject: Something wrong with OI\n
+            From: some@person.at
+            +\nX-Flying-Pig-Header: i am here
+            \n
+            \n
+            This is the body\n
+            next line\n
+        """
+        self.ui.debug('',
+                 'addmessageheader: called to add %s: %s' % (headername,
+                                                             headervalue))
+
+        insertionpoint = content.find(linebreak * 2)
+        if insertionpoint == -1:
+            self.ui.debug('', 'addmessageheader: headers were missing')
+        else:
+            self.ui.debug('', 'addmessageheader: headers end at position %d' % insertionpoint)
+            mark = '==>EOH<=='
+            contextstart = max(0,            insertionpoint - 100)
+            contextend   = min(len(content), insertionpoint + 100)
+            self.ui.debug('', 'addmessageheader: header/body transition context (marked by %s): %s' %
+                          (mark, repr(content[contextstart:insertionpoint]) + \
+                          mark + repr(content[insertionpoint:contextend])))
+
+        # Hoping for case #4
+        prefix = linebreak
+        suffix = ''
+        # Case #2
+        if insertionpoint == 0:
+            prefix = ''
+            suffix = ''
+        # Either case #1 or #3
+        elif insertionpoint == -1:
+            prefix = ''
+            suffix = linebreak
+            insertionpoint = 0
+            # Case #3: when body starts immediately, without preceding '\n'
+            # (this shouldn't happen with proper mail messages, but
+            # we seen many broken ones), we should add '\n' to make
+            # new (and the only header, in this case) to be properly
+            # separated from the message body.
+            if content[0:len(linebreak)] != linebreak:
+                suffix = suffix + linebreak
+
+        self.ui.debug('', 'addmessageheader: insertionpoint = %d' % insertionpoint)
+        headers = content[0:insertionpoint]
+        self.ui.debug('', 'addmessageheader: headers = %s' % repr(headers))
+        new_header = prefix + ("%s: %s" % (headername, headervalue)) + suffix
+        self.ui.debug('', 'addmessageheader: new_header = ' + repr(new_header))
+        return headers + new_header + content[insertionpoint:]
+
+
+    def __find_eoh(self, content):
+        """
+        Searches for the point where mail headers end.
+        Either double '\n', or end of string.
+
+        Arguments:
+        - content: contents of the message to search in
+        Returns: position of the first non-header byte.
+
+        """
+        eoh_cr = content.find('\n\n')
+        if eoh_cr == -1:
+            eoh_cr = len(content)
+
+        return eoh_cr
+
+
+    def getmessageheader(self, content, name):
+        """
+        Searches for the given header and returns its value.
+        Header name is case-insensitive.
+
+        Arguments:
+        - contents: message itself
+        - name: name of the header to be searched
+
+        Returns: header value or None if no such header was found
+
+        """
+        self.ui.debug('', 'getmessageheader: called to get %s' % name)
+        eoh = self.__find_eoh(content)
+        self.ui.debug('', 'getmessageheader: eoh = %d' % eoh)
+        headers = content[0:eoh]
+        self.ui.debug('', 'getmessageheader: headers = %s' % repr(headers))
+
+        m = re.search('^%s:(.*)$' % name, headers, flags = re.MULTILINE | re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        else:
+            return None
+
+
+    def deletemessageheaders(self, content, header_list):
+        """
+        Deletes headers in the given list from the message content.
+
+        Arguments:
+        - content: message itself
+        - header_list: list of headers to be deleted or just the header name
+
+        We expect our message to have '\n' as line endings.
+
+        """
+        if type(header_list) != type([]):
+            header_list = [header_list]
+        self.ui.debug('', 'deletemessageheaders: called to delete %s' % (header_list))
+
+        if not len(header_list): return content
+
+        eoh = self.__find_eoh(content)
+        self.ui.debug('', 'deletemessageheaders: end of headers = %d' % eoh)
+        headers = content[0:eoh]
+        rest = content[eoh:]
+        self.ui.debug('', 'deletemessageheaders: headers = %s' % repr(headers))
+        new_headers = []
+        for h in headers.split('\n'):
+            keep_it = True
+            for trim_h in header_list:
+                if len(h) > len(trim_h) and h[0:len(trim_h)+1] == (trim_h + ":"):
+                    keep_it = False
+                    break
+            if keep_it: new_headers.append(h)
+
+        return ('\n'.join(new_headers) + rest)
+
+
+
+
     def change_message_uid(self, uid, new_uid):
         """Change the message from existing uid to new_uid
 
@@ -297,14 +568,14 @@ class BaseFolder(object):
         :param new_uid: (optional) If given, the old UID will be changed
             to a new UID. This allows backends efficient renaming of
             messages if the UID has changed."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def deletemessage(self, uid):
         """
         Note that this function does not check against dryrun settings,
         so you need to ensure that it is never called in a
         dryrun mode."""
-        raise NotImplementedException
+        raise NotImplementedError
 
     def deletemessages(self, uidlist):
         """
@@ -389,7 +660,7 @@ class BaseFolder(object):
                               (uid, self.accountname))
             raise    #raise on unknown errors, so we can fix those
 
-    def syncmessagesto_copy(self, dstfolder, statusfolder):
+    def __syncmessagesto_copy(self, dstfolder, statusfolder):
         """Pass1: Copy locally existing messages not on the other side
 
         This will copy messages to dstfolder that exist locally but are
@@ -433,7 +704,7 @@ class BaseFolder(object):
         for thread in threads:
             thread.join()
 
-    def syncmessagesto_delete(self, dstfolder, statusfolder):
+    def __syncmessagesto_delete(self, dstfolder, statusfolder):
         """Pass 2: Remove locally deleted messages on dst
 
         Get all UIDS in statusfolder but not self. These are messages
@@ -454,7 +725,7 @@ class BaseFolder(object):
             for folder in [statusfolder, dstfolder]:
                 folder.deletemessages(deletelist)
 
-    def syncmessagesto_flags(self, dstfolder, statusfolder):
+    def __syncmessagesto_flags(self, dstfolder, statusfolder):
         """Pass 3: Flag synchronization
 
         Compare flag mismatches in self with those in statusfolder. If
@@ -476,9 +747,10 @@ class BaseFolder(object):
                 continue
 
             selfflags = self.getmessageflags(uid)
-            statusflags = statusfolder.getmessageflags(uid)
-            #if we could not get message flags from LocalStatus, assume empty.
-            if statusflags is None:
+
+            if statusfolder.uidexists(uid):
+                statusflags = statusfolder.getmessageflags(uid)
+            else:
                 statusflags = set()
 
             addflags = selfflags - statusflags
@@ -534,14 +806,16 @@ class BaseFolder(object):
          deleted there), sync the flag change to both dstfolder and
          statusfolder.
 
+        Pass4: Synchronize label changes (Gmail only)
+         Compares label mismatches in self with those in statusfolder.
+         If msg has a valid UID and exists on dstfolder, syncs the labels
+         to both dstfolder and statusfolder.
+
         :param dstfolder: Folderinstance to sync the msgs to.
         :param statusfolder: LocalStatus instance to sync against.
-        """
-        passes = [('copying messages'       , self.syncmessagesto_copy),
-                  ('deleting messages'      , self.syncmessagesto_delete),
-                  ('syncing flags'          , self.syncmessagesto_flags)]
 
-        for (passdesc, action) in passes:
+        """
+        for (passdesc, action) in self.syncmessagesto_passes:
             # bail out on CTRL-C or SIGTERM
             if offlineimap.accounts.Account.abort_NOW_signal.is_set():
                 break

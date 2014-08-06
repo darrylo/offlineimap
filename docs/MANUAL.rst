@@ -63,6 +63,9 @@ set, and you can read about other features later with `offlineimap.conf`.
 
 Check out the `Use Cases`_ section for some example configurations.
 
+If you want to be XDG-compatible, you can put your configuration file into
+`$XDG_CONFIG_HOME/offlineimap/config`.
+
 
 OPTIONS
 =======
@@ -219,7 +222,7 @@ achieve this.
     order to use this. This will save you plenty of disk activity. Do
     note that the sqlite backend is still considered experimental as it
     has only been included recently (although a loss of your status
-    cache should not be a tragedy as that file can be rebuild
+    cache should not be a tragedy as that file can be rebuilt
     automatically)
 
  4) Use quick sync. A regular sync will request all flags and all UIDs
@@ -428,6 +431,43 @@ This is an example of a setup where "TheOtherImap" requires all folders to be un
     remotepass = XXX
     remoteuser = XXX
     #Do not use nametrans here.
+
+
+Sync from Gmail to a local Maildir with labels
+----------------------------------------------
+
+This is an example of a setup where GMail gets synced with a local Maildir.
+It also keeps track of GMail labels, that get embedded into the messages
+under the header configured in labelsheader, and syncs them back and forth
+the same way as flags.
+The header used for the labels may need to be set according to the email
+client used.
+Some choices that may be recognized by email clients are `X-Keywords` or `X-Labels`.
+
+The first time OfflineIMAP runs with synclabels enabled on a large repository it
+may take some time as the labels are read / embedded on every message.
+Afterwards local label changes are detected using modification times, which is
+much faster::
+
+    [Account Gmail-mine]
+    localrepository = Gmaillocal-mine
+    remoterepository = Gmailserver-mine
+    synclabels = yes
+    # This header is where labels go.  Usually you will be fine
+    # with default value, but in case you want it different,
+    # here we go:
+    labelsheader = X-GMail-Keywords
+
+    [Repository Gmailserver-mine]
+    #This is the remote repository
+    type = Gmail
+    remotepass = XXX
+    remoteuser = XXX
+
+    [Repository Gmaillocal-mine]
+    #This is the 'local' repository
+    type = GmailMaildir
+
 
 Selecting only a few folders to sync
 ------------------------------------
