@@ -1,6 +1,5 @@
 # Local status cache repository support
-# Copyright (C) 2002 John Goerzen
-# <jgoerzen@complete.org>
+# Copyright (C) 2002-2017 John Goerzen & contributors
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -16,36 +15,46 @@
 #    along with this program; if not, write to the Free Software
 #    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
 
+import os
+
 from offlineimap.folder.LocalStatus import LocalStatusFolder
 from offlineimap.folder.LocalStatusSQLite import LocalStatusSQLiteFolder
 from offlineimap.repository.Base import BaseRepository
-import os
-import re
+from offlineimap.error import OfflineImapError
+
 
 class LocalStatusRepository(BaseRepository):
     def __init__(self, reposname, account):
         BaseRepository.__init__(self, reposname, account)
 
-        # class and root for all backends
+        # class and root for all backends.
         self.backends = {}
         self.backends['sqlite'] = {
-          'class': LocalStatusSQLiteFolder,
-          'root': os.path.join(account.getaccountmeta(), 'LocalStatus-sqlite')
+            'class': LocalStatusSQLiteFolder,
+            'root': os.path.join(account.getaccountmeta(), 'LocalStatus-sqlite')
         }
-
         self.backends['plain'] = {
-          'class': LocalStatusFolder,
-          'root': os.path.join(account.getaccountmeta(), 'LocalStatus')
+            'class': LocalStatusFolder,
+            'root': os.path.join(account.getaccountmeta(), 'LocalStatus')
         }
 
-        # Set class and root for the configured backend
-        self.setup_backend(self.account.getconf('status_backend', 'plain'))
+        if self.account.getconf('status_backend', None) is not None:
+            raise OfflineImapError(
+                "the 'status_backend' configuration option is not supported"
+                " anymore; please, remove this configuration option.",
+                OfflineImapError.ERROR.REPO
+            )
+        # Set class and root for sqlite.
+        self.setup_backend('sqlite')
 
         if not os.path.exists(self.root):
             os.mkdir(self.root, 0o700)
 
-        # self._folders is a dict of name:LocalStatusFolders()
+        # self._folders is a dict of name:LocalStatusFolders().
         self._folders = {}
+
+    def _instanciatefolder(self, foldername):
+        return self.LocalStatusFolderClass(foldername, self) # Instanciate.
 
     def setup_backend(self, backend):
         if backend in self.backends.keys():
@@ -53,24 +62,21 @@ class LocalStatusRepository(BaseRepository):
             self.root = self.backends[backend]['root']
             self.LocalStatusFolderClass = self.backends[backend]['class']
 
-        else:
-            raise SyntaxWarning("Unknown status_backend '%s' for account '%s'" \
-                                % (backend, self.account.name))
-
     def import_other_backend(self, folder):
         for bk, dic in self.backends.items():
-            # skip folder's own type
+            # Skip folder's own type.
             if dic['class'] == type(folder):
                 continue
 
             repobk = LocalStatusRepository(self.name, self.account)
-            repobk.setup_backend(bk)      # fake the backend
+            repobk.setup_backend(bk)      # Fake the backend.
             folderbk = dic['class'](folder.name, repobk)
 
-            # if backend contains data, import it to folder.
+            # If backend contains data, import it to folder.
             if not folderbk.isnewfolder():
-                self.ui._msg('Migrating LocalStatus cache from %s to %s ' % (bk, self._backend) + \
-                             'status folder for %s:%s' % (self.name, folder.name))
+                self.ui._msg("Migrating LocalStatus cache from %s to %s "
+                    "status folder for %s:%s"%
+                    (bk, self._backend, self.name, folder.name))
 
                 folderbk.cachemessagelist()
                 folder.messagelist = folderbk.messagelist
@@ -81,26 +87,35 @@ class LocalStatusRepository(BaseRepository):
         return '.'
 
     def makefolder(self, foldername):
-        """Create a LocalStatus Folder"""
+        """Create a LocalStatus Folder."""
 
         if self.account.dryrun:
-            return # bail out in dry-run mode
+            return # Bail out in dry-run mode.
 
-        # Create an empty StatusFolder
-        folder = self.LocalStatusFolderClass(foldername, self)
+        # Create an empty StatusFolder.
+        folder = self._instanciatefolder(foldername)
+        # First delete any existing data to make sure we won't consider obsolete
+        # data. This might happen if the user removed the folder (maildir) and
+        # it is re-created afterwards.
+        folder.purge()
+        folder.openfiles()
         folder.save()
+        folder.closefiles()
 
         # Invalidate the cache.
         self.forgetfolders()
 
     def getfolder(self, foldername):
-        """Return the Folder() object for a foldername"""
+        """Return the Folder() object for a foldername.
+
+        Caller must call closefiles() on the folder when done."""
+
         if foldername in self._folders:
             return self._folders[foldername]
 
-        folder = self.LocalStatusFolderClass(foldername, self)
+        folder = self._instanciatefolder(foldername)
 
-        # if folder is empty, try to import data from an other backend
+        # If folder is empty, try to import data from an other backend.
         if folder.isnewfolder():
             self.import_other_backend(folder)
 
@@ -114,9 +129,11 @@ class LocalStatusRepository(BaseRepository):
         (see getfolderfilename) so we can not derive folder names from
         the file names that we have available. TODO: need to store a
         list of folder names somehow?"""
+
         pass
 
     def forgetfolders(self):
         """Forgets the cached list of folders, if any.  Useful to run
         after a sync run."""
+
         self._folders = {}

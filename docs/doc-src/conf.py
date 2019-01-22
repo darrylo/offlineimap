@@ -16,14 +16,15 @@ import sys, os
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-sys.path.insert(0,os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath('../..'))
 
-from offlineimap import __version__,__author__
+from offlineimap import __version__, __author__, __copyright__
 # -- General configuration -----------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.doctest', 'sphinx.ext.intersphinx', 'sphinx.ext.todo']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.doctest',
+              'sphinx.ext.intersphinx', 'sphinx.ext.todo', 'sphinx.ext.viewcode']
 autoclass_content = "both"
 
 # Add any paths that contain templates here, relative to this directory.
@@ -39,8 +40,8 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'OfflineImap'
-copyright = u'2002-2010, ' + __author__
+project = u'OfflineIMAP'
+copyright = __copyright__
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -174,8 +175,8 @@ htmlhelp_basename = 'dev-doc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
-  ('index', 'offlineimap.tex', u'OfflineImap Documentation',
-   u'OfflineImap contributors', 'manual'),
+  ('index', 'offlineimap.tex', u'OfflineIMAP Documentation',
+   u'OfflineIMAP contributors', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of

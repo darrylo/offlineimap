@@ -1,6 +1,5 @@
 # Gmail IMAP folder support
-# Copyright (C) 2008 Riccardo Murri <riccardo.murri@gmail.com>
-# Copyright (C) 2002-2007 John Goerzen <jgoerzen@complete.org>
+# Copyright (C) 2002-2017 John Goerzen & contributors.
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -16,15 +15,16 @@
 #    along with this program; if not, write to the Free Software
 #    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
 
+"""Folder implementation to support features of the Gmail IMAP server."""
+
 import re
+import six
+from sys import exc_info
 
-from offlineimap import imaputil, OfflineImapError
-from offlineimap import imaplibutil
+from offlineimap import imaputil, imaplibutil, OfflineImapError
 import offlineimap.accounts
-
-"""Folder implementation to support features of the Gmail IMAP server.
-"""
 from .IMAP import IMAPFolder
+
 
 class GmailFolder(IMAPFolder):
     """Folder implementation to support features of the Gmail IMAP server.
@@ -42,11 +42,8 @@ class GmailFolder(IMAPFolder):
       https://developers.google.com/google-apps/gmail/imap_extensions
     """
 
-    def __init__(self, imapserver, name, repository):
-        super(GmailFolder, self).__init__(imapserver, name, repository)
-        self.trash_folder = repository.gettrashfolder(name)
-        # Gmail will really delete messages upon EXPUNGE in these folders
-        self.real_delete_folders =  [ self.trash_folder, repository.getspamfolder() ]
+    def __init__(self, imapserver, name, repository, decode=True):
+        super(GmailFolder, self).__init__(imapserver, name, repository, decode)
 
         # The header under which labels are stored
         self.labelsheader = self.repository.account.getconf('labelsheader', 'X-Keywords')
@@ -57,10 +54,10 @@ class GmailFolder(IMAPFolder):
         # if synclabels is enabled, add a 4th pass to sync labels
         if self.synclabels:
             self.imap_query.insert(0, 'X-GM-LABELS')
-            self.syncmessagesto_passes.append(('syncing labels', self.syncmessagesto_labels))
+            self.syncmessagesto_passes.append(self.syncmessagesto_labels)
 
         # Labels to be left alone
-        ignorelabels =  self.repository.account.getconf('ignorelabels', '')
+        ignorelabels = self.repository.account.getconf('ignorelabels', '')
         self.ignorelabels = set([l for l in re.split(r'\s*,\s*', ignorelabels) if len(l)])
 
 
@@ -72,11 +69,7 @@ class GmailFolder(IMAPFolder):
                   (probably severity MESSAGE) if e.g. no message with
                   this UID could be found.
         """
-        imapobj = self.imapserver.acquireconnection()
-        try:
-            data = self._fetch_from_imap(imapobj, str(uid), 2)
-        finally:
-            self.imapserver.releaseconnection(imapobj)
+        data = self._fetch_from_imap(str(uid), self.retrycount)
 
         # data looks now e.g.
         #[('320 (X-GM-LABELS (...) UID 17061 BODY[] {2565}','msgbody....')]
@@ -93,14 +86,18 @@ class GmailFolder(IMAPFolder):
                 labels = set()
             labels = labels - self.ignorelabels
             labels_str = imaputil.format_labels_string(self.labelsheader, sorted(labels))
+
+            # First remove old label headers that may be in the message content retrieved
+            # from gmail Then add a labels header with current gmail labels.
+            body = self.deletemessageheaders(body, self.labelsheader)
             body = self.addmessageheader(body, '\n', self.labelsheader, labels_str)
 
         if len(body)>200:
-            dbg_output = "%s...%s" % (str(body)[:150], str(body)[-50:])
+            dbg_output = "%s...%s"% (str(body)[:150], str(body)[-50:])
         else:
             dbg_output = body
 
-        self.ui.debug('imap', "Returned object from fetching %d: '%s'" %
+        self.ui.debug('imap', "Returned object from fetching %d: '%s'"%
                       (uid, dbg_output))
         return body
 
@@ -110,18 +107,25 @@ class GmailFolder(IMAPFolder):
         else:
             return set()
 
+    # Interface from BaseFolder
+    def msglist_item_initializer(self, uid):
+        return {'uid': uid, 'flags': set(), 'labels': set(), 'time': 0}
+
+
     # TODO: merge this code with the parent's cachemessagelist:
     # TODO: they have too much common logics.
-    def cachemessagelist(self):
+    def cachemessagelist(self, min_date=None, min_uid=None):
         if not self.synclabels:
-            return super(GmailFolder, self).cachemessagelist()
+            return super(GmailFolder, self).cachemessagelist(
+                min_date=min_date, min_uid=min_uid)
 
-        self.messagelist = {}
+        self.dropmessagelistcache()
 
         self.ui.collectingdata(None, self)
         imapobj = self.imapserver.acquireconnection()
         try:
-            msgsToFetch = self._msgs_to_fetch(imapobj)
+            msgsToFetch = self._msgs_to_fetch(
+                imapobj, min_date=min_date, min_uid=min_uid)
             if not msgsToFetch:
                 return # No messages to sync
 
@@ -129,13 +133,17 @@ class GmailFolder(IMAPFolder):
             # imaplib2 from quoting the sequence.
             #
             # NB: msgsToFetch are sequential numbers, not UID's
-            res_type, response = imapobj.fetch("'%s'" % msgsToFetch,
+            res_type, response = imapobj.fetch("'%s'"% msgsToFetch,
               '(FLAGS X-GM-LABELS UID)')
             if res_type != 'OK':
-                raise OfflineImapError("FETCHING UIDs in folder [%s]%s failed. " % \
-                  (self.getrepository(), self) + \
-                  "Server responded '[%s] %s'" % \
-                  (res_type, response), OfflineImapError.ERROR.FOLDER)
+                six.reraise(OfflineImapError,
+                            OfflineImapError(
+                                "FETCHING UIDs in folder [%s]%s failed. "%
+                                (self.getrepository(), self) +
+                                "Server responded '[%s] %s'"%
+                                (res_type, response),
+                                OfflineImapError.ERROR.FOLDER),
+                            exc_info()[2])
         finally:
             self.imapserver.releaseconnection(imapobj)
 
@@ -151,7 +159,8 @@ class GmailFolder(IMAPFolder):
                                           str(options),
                                           minor = 1)
             else:
-                uid = long(options['UID'])
+                uid = int(options['UID'])
+                self.messagelist[uid] = self.msglist_item_initializer(uid)
                 flags = imaputil.flagsimap2maildir(options['FLAGS'])
                 m = re.search('\(([^\)]*)\)', options['X-GM-LABELS'])
                 if m:
@@ -183,8 +192,9 @@ class GmailFolder(IMAPFolder):
         if not self.synclabels:
             return super(GmailFolder, self).savemessage(uid, content, flags, rtime)
 
-        labels = imaputil.labels_from_header(self.labelsheader,
-          self.getmessageheader(content, self.labelsheader))
+        labels = set()
+        for hstr in self.getmessageheaderlist(content, self.labelsheader):
+            labels.update(imaputil.labels_from_header(self.labelsheader, hstr))
 
         ret = super(GmailFolder, self).savemessage(uid, content, flags, rtime)
         self.savemessagelabels(ret, labels)

@@ -1,5 +1,4 @@
-# Copyright (C) 2002-2007 John Goerzen <jgoerzen@complete.org>
-#               2010 Sebastian Spaeth <Sebastian@SSpaeth.de> and contributors
+# Copyright (C) 2002-2016 John Goerzen & contributors.
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -14,6 +13,9 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program; if not, write to the Free Software
 #    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+
+import six
+from sys import exc_info
 
 try:
     from configparser import NoSectionError
@@ -42,16 +44,16 @@ class Repository(object):
             name = account.getconf('remoterepository')
             # We don't support Maildirs on the remote side.
             typemap = {'IMAP': IMAPRepository,
-                       'Gmail': GmailRepository}
+                'Gmail': GmailRepository}
 
         elif reqtype == 'local':
             name = account.getconf('localrepository')
             typemap = {'IMAP': MappedIMAPRepository,
-                       'Maildir': MaildirRepository,
-                       'GmailMaildir': GmailMaildirRepository}
+                'Maildir': MaildirRepository,
+                'GmailMaildir': GmailMaildirRepository}
 
         elif reqtype == 'status':
-            # create and return a LocalStatusRepository
+            # create and return a LocalStatusRepository.
             name = account.getconf('localrepository')
             return LocalStatusRepository(name, account)
 
@@ -59,21 +61,25 @@ class Repository(object):
             errstr = "Repository type %s not supported" % reqtype
             raise OfflineImapError(errstr, OfflineImapError.ERROR.REPO)
 
-        # Get repository type
+        # Get repository type.
         config = account.getconfig()
         try:
             repostype = config.get('Repository ' + name, 'type').strip()
         except NoSectionError as e:
             errstr = ("Could not find section '%s' in configuration. Required "
                       "for account '%s'." % ('Repository %s' % name, account))
-            raise OfflineImapError(errstr, OfflineImapError.ERROR.REPO)
+            six.reraise(OfflineImapError,
+                        OfflineImapError(errstr, OfflineImapError.ERROR.REPO),
+                        exc_info()[2])
 
         try:
             repo = typemap[repostype]
         except KeyError:
-            errstr = "'%s' repository not supported for '%s' repositories." \
-                     % (repostype, reqtype)
-            raise OfflineImapError(errstr, OfflineImapError.ERROR.REPO)
+            errstr = "'%s' repository not supported for '%s' repositories."% \
+                (repostype, reqtype)
+            six.reraise(OfflineImapError,
+                        OfflineImapError(errstr, OfflineImapError.ERROR.REPO),
+                        exc_info()[2])
 
         return repo(name, account)
 

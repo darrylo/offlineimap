@@ -1,7 +1,6 @@
 """Eval python code with global namespace of a python source file."""
 
-# Copyright (C) 2002 John Goerzen
-# <jgoerzen@complete.org>
+# Copyright (C) 2002-2016 John Goerzen & contributors
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -23,19 +22,23 @@ try:
 except:
     pass
 
-class LocalEval:
+class LocalEval(object):
+    """Here is a powerfull but very dangerous option, of course."""
+
     def __init__(self, path=None):
-        self.namespace={}
+        self.namespace = {}
 
         if path is not None:
-            file=open(path, 'r')
-            module=imp.load_module(
+            # FIXME: limit opening files owned by current user with rights set
+            # to fixed mode 644.
+            foo = open(path, 'r')
+            module = imp.load_module(
                 '<none>',
-                file,
+                foo,
                 path,
                 ('', 'r', imp.PY_SOURCE))
             for attr in dir(module):
-                self.namespace[attr]=getattr(module, attr)
+                self.namespace[attr] = getattr(module, attr)
 
     def eval(self, text, namespace=None):
         names = {}

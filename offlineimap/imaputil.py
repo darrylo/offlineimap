@@ -1,6 +1,5 @@
 # IMAP utility module
-# Copyright (C) 2002 John Goerzen
-# <jgoerzen@complete.org>
+# Copyright (C) 2002-2015 John Goerzen & contributors
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -18,6 +17,8 @@
 
 import re
 import string
+import binascii
+import codecs
 from offlineimap.ui import getglobalui
 
 
@@ -26,6 +27,9 @@ from offlineimap.ui import getglobalui
 # Message headers that use space as the separator (for label storage)
 SPACE_SEPARATED_LABEL_HEADERS = ('X-Label', 'Keywords')
 
+# Find the modified UTF-7 shifts of an international mailbox name.
+MUTF7_SHIFT_RE = re.compile(r'&[^-]*-|\+')
+
 
 def __debug(*args):
     msg = []
@@ -33,41 +37,43 @@ def __debug(*args):
         msg.append(str(arg))
     getglobalui().debug('imap', " ".join(msg))
 
-def dequote(string):
+def dequote(s):
     """Takes string which may or may not be quoted and unquotes it.
 
     It only considers double quotes. This function does NOT consider
-    parenthised lists to be quoted.
-    """
-    if string and string.startswith('"') and string.endswith('"'):
-        string = string[1:-1]  # Strip off the surrounding quotes.
-        string = string.replace('\\"', '"')
-        string = string.replace('\\\\', '\\')
-    return string
+    parenthised lists to be quoted."""
 
-def quote(string):
+    if s and s.startswith('"') and s.endswith('"'):
+        s = s[1:-1]  # Strip off the surrounding quotes.
+        s = s.replace('\\"', '"')
+        s = s.replace('\\\\', '\\')
+    return s
+
+def quote(s):
     """Takes an unquoted string and quotes it.
 
     It only adds double quotes. This function does NOT consider
-    parenthised lists to be quoted.
-    """
-    string = string.replace('"', '\\"')
-    string = string.replace('\\', '\\\\')
-    return '"%s"' % string
+    parenthised lists to be quoted."""
 
-def flagsplit(string):
+    s = s.replace('"', '\\"')
+    s = s.replace('\\', '\\\\')
+    return '"%s"'% s
+
+def flagsplit(s):
     """Converts a string of IMAP flags to a list
 
     :returns: E.g. '(\\Draft \\Deleted)' returns  ['\\Draft','\\Deleted'].
         (FLAGS (\\Seen Old) UID 4807) returns
         ['FLAGS,'(\\Seen Old)','UID', '4807']
     """
-    if string[0] != '(' or string[-1] != ')':
-        raise ValueError("Passed string '%s' is not a flag list" % string)
-    return imapsplit(string[1:-1])
+
+    if s[0] != '(' or s[-1] != ')':
+        raise ValueError("Passed s '%s' is not a flag list"% s)
+    return imapsplit(s[1:-1])
 
 def __options2hash(list):
     """convert list [1,2,3,4,5,6] to {1:2, 3:4, 5:6}"""
+
     # effectively this does dict(zip(l[::2],l[1::2])), however
     # measurements seemed to have indicated that the manual variant is
     # faster for mosly small lists.
@@ -84,6 +90,7 @@ def flags2hash(flags):
 
     E.g. '(FLAGS (\\Seen Old) UID 4807)' leads to
     {'FLAGS': '(\\Seen Old)', 'UID': '4807'}"""
+
     return __options2hash(flagsplit(flags))
 
 def imapsplit(imapstring):
@@ -96,7 +103,7 @@ def imapsplit(imapstring):
 
     ['(\\HasNoChildren)', '"."', '"INBOX.Sent"']"""
 
-    if not isinstance(imapstring, basestring):
+    if not isinstance(imapstring, str):
         __debug("imapsplit() got a non-string input; working around.")
         # Sometimes, imaplib will throw us a tuple if the input
         # contains a literal.  See Python bug
@@ -119,8 +126,7 @@ def imapsplit(imapstring):
                 arg = arg.replace('\\', '\\\\')
                 arg = arg.replace('"', '\\"')
                 arg = '"%s"' % arg
-                __debug("imapsplit() non-string [%d]: Appending %s" %\
-                      (i, arg))
+                __debug("imapsplit() non-string [%d]: Appending %s"% (i, arg))
                 retval.append(arg)
             else:
                 # Even -- we have a string that ends with a literal
@@ -129,8 +135,8 @@ def imapsplit(imapstring):
                 # Recursion to the rescue.
                 arg = imapstring[i]
                 arg = re.sub('\{\d+\}$', '', arg)
-                __debug("imapsplit() non-string [%d]: Feeding %s to recursion" %\
-                      (i, arg))
+                __debug("imapsplit() non-string [%d]: Feeding %s to recursion"%\
+                    (i, arg))
                 retval.extend(imapsplit(arg))
         __debug("imapsplit() non-string: returning %s" % str(retval))
         return retval
@@ -157,7 +163,13 @@ def imapsplit(imapstring):
             retval.append(quoted)
             workstr = rest
         else:
-            splits = string.split(workstr, maxsplit = 1)
+            splits = None
+            # Python2
+            if hasattr(string, 'split'):
+                splits = string.split(workstr, maxsplit = 1)
+            # Python3
+            else:
+                splits = str.split(workstr, maxsplit = 1)
             splitslen = len(splits)
             # The unquoted word is splits[0]; the remainder is splits[1]
             if splitslen == 2:
@@ -182,7 +194,8 @@ flagmap = [('\\Seen', 'S'),
            ('\\Draft', 'D')]
 
 def flagsimap2maildir(flagstring):
-    """Convert string '(\\Draft \\Deleted)' into a flags set(DR)"""
+    """Convert string '(\\Draft \\Deleted)' into a flags set(DR)."""
+
     retval = set()
     imapflaglist = flagstring[1:-1].split()
     for imapflag, maildirflag in flagmap:
@@ -190,8 +203,17 @@ def flagsimap2maildir(flagstring):
             retval.add(maildirflag)
     return retval
 
+def flagsimap2keywords(flagstring):
+    """Convert string '(\\Draft \\Deleted somekeyword otherkeyword)' into a
+    keyword set (somekeyword otherkeyword)."""
+
+    imapflagset = set(flagstring[1:-1].split())
+    serverflagset = set([flag for (flag, c) in flagmap])
+    return imapflagset - serverflagset
+
 def flagsmaildir2imap(maildirflaglist):
-    """Convert set of flags ([DR]) into a string '(\\Deleted \\Draft)'"""
+    """Convert set of flags ([DR]) into a string '(\\Deleted \\Draft)'."""
+
     retval = []
     for imapflag, maildirflag in flagmap:
         if maildirflag in maildirflaglist:
@@ -203,11 +225,12 @@ def uid_sequence(uidlist):
 
     [1,2,3,4,5,10,12,13] will return "1:5,10,12:13".  This function sorts
     the list, and only collapses if subsequent entries form a range.
-    :returns: The collapsed UID list as string"""
+    :returns: The collapsed UID list as string."""
+
     def getrange(start, end):
         if start == end:
             return(str(start))
-        return "%s:%s" % (start, end)
+        return "%s:%s"% (start, end)
 
     if not len(uidlist): return '' # Empty list, return
     start, end = None, None
@@ -229,57 +252,53 @@ def uid_sequence(uidlist):
     return ",".join(retval)
 
 
-def __split_quoted(string):
-	"""
-	Looks for the ending quote character in the string that starts
-	with quote character, splitting out quoted component and the
-	rest of the string (without possible space between these two
-	parts.
+def __split_quoted(s):
+    """Looks for the ending quote character in the string that starts
+    with quote character, splitting out quoted component and the
+    rest of the string (without possible space between these two
+    parts.
 
-	First character of the string is taken to be quote character.
+    First character of the string is taken to be quote character.
 
-	Examples:
-	 - "this is \" a test" (\\None) => ("this is \" a test", (\\None))
-	 - "\\" => ("\\", )
+    Examples:
+     - "this is \" a test" (\\None) => ("this is \" a test", (\\None))
+     - "\\" => ("\\", )
+    """
 
-	"""
+    if len(s) == 0:
+        return ('', '')
 
-	if len(string) == 0:
-		return ('', '')
-
-	q = quoted = string[0]
-	rest = string[1:]
-	while True:
-		next_q = rest.find(q)
-		if next_q == -1:
-			raise ValueError("can't find ending quote '%s' in '%s'" % (q, string))
-		# If quote is preceeded by even number of backslashes,
-		# then it is the ending quote, otherwise the quote
-		# character is escaped by backslash, so we should
-		# continue our search.
-		is_escaped = False
-		i = next_q - 1
-		while i >= 0 and rest[i] == '\\':
-			i -= 1
-			is_escaped = not is_escaped
-		quoted += rest[0:next_q + 1]
-		rest = rest[next_q + 1:]
-		if not is_escaped:
-			return (quoted, rest.lstrip())
+    q = quoted = s[0]
+    rest = s[1:]
+    while True:
+        next_q = rest.find(q)
+        if next_q == -1:
+            raise ValueError("can't find ending quote '%s' in '%s'"% (q, s))
+        # If quote is preceeded by even number of backslashes,
+        # then it is the ending quote, otherwise the quote
+        # character is escaped by backslash, so we should
+        # continue our search.
+        is_escaped = False
+        i = next_q - 1
+        while i >= 0 and rest[i] == '\\':
+            i -= 1
+            is_escaped = not is_escaped
+        quoted += rest[0:next_q + 1]
+        rest = rest[next_q + 1:]
+        if not is_escaped:
+            return (quoted, rest.lstrip())
 
 
 def format_labels_string(header, labels):
-    """
-    Formats labels for embedding into a message,
+    """Formats labels for embedding into a message,
     with format according to header name.
-    
+
     Headers from SPACE_SEPARATED_LABEL_HEADERS keep space-separated list
     of labels, the rest uses comma (',') as the separator.
 
     Also see parse_labels_string() and modify it accordingly
-    if logics here gets changed.
+    if logics here gets changed."""
 
-    """
     if header in SPACE_SEPARATED_LABEL_HEADERS:
         sep = ' '
     else:
@@ -289,18 +308,16 @@ def format_labels_string(header, labels):
 
 
 def parse_labels_string(header, labels_str):
-    """
-    Parses a string into a set of labels, with a format according to
+    """Parses a string into a set of labels, with a format according to
     the name of the header.
 
     See __format_labels_string() for explanation on header handling
     and keep these two functions synced with each other.
 
     TODO: add test to ensure that
-      format_labels_string * parse_labels_string is unity
+    - format_labels_string * parse_labels_string is unity
     and
-      parse_labels_string * format_labels_string is unity
-
+    - parse_labels_string * format_labels_string is unity
     """
 
     if header in SPACE_SEPARATED_LABEL_HEADERS:
@@ -314,15 +331,13 @@ def parse_labels_string(header, labels_str):
 
 
 def labels_from_header(header_name, header_value):
-    """
-    Helper that builds label set from the corresponding header value.
+    """Helper that builds label set from the corresponding header value.
 
     Arguments:
     - header_name: name of the header that keeps labels;
     - header_value: value of the said header, can be None
 
     Returns: set of labels parsed from the header (or empty set).
-
     """
 
     if header_value:
@@ -332,3 +347,110 @@ def labels_from_header(header_name, header_value):
 
     return labels
 
+
+def decode_mailbox_name(name):
+    """Decodes a modified UTF-7 mailbox name.
+
+    If the string cannot be decoded, it is returned unmodified.
+
+    See RFC 3501, sec. 5.1.3.
+
+    Arguments:
+    - name: string, possibly encoded with modified UTF-7
+
+    Returns: decoded UTF-8 string.
+    """
+    def demodify(m):
+        s = m.group()
+        if s == '+':
+            return '+-'
+        return '+' + s[1:-1].replace(',', '/') + '-'
+
+    ret = MUTF7_SHIFT_RE.sub(demodify, name)
+
+    try:
+        return ret.decode('utf-7').encode('utf-8')
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return name
+
+# Functionality to convert folder names encoded in IMAP_utf_7 to utf_8.
+# This is achieved by defining 'imap4_utf_7' as a proper encoding scheme.
+
+# Public API, to be used in repository definitions
+
+def IMAP_utf8(foldername):
+    """Convert IMAP4_utf_7 encoded string to utf-8"""
+    return foldername.decode('imap4-utf-7').encode('utf-8')
+
+def utf8_IMAP(foldername):
+    """Convert utf-8 encoded string to IMAP4_utf_7"""
+    return foldername.decode('utf-8').encode('imap4-utf-7')
+
+# Codec definition
+
+def modified_base64(s):
+    s = s.encode('utf-16be')
+    return binascii.b2a_base64(s).rstrip('\n=').replace('/', ',')
+
+def doB64(_in, r):
+    if _in:
+        r.append('&%s-' % modified_base64(''.join(_in)))
+        del _in[:]
+
+def encoder(s):
+    r = []
+    _in = []
+    for c in s:
+        ordC = ord(c)
+        if 0x20 <= ordC <= 0x25 or 0x27 <= ordC <= 0x7e:
+            doB64(_in, r)
+            r.append(c)
+        elif c == '&':
+            doB64(_in, r)
+            r.append('&-')
+        else:
+            _in.append(c)
+    doB64(_in, r)
+    return (str(''.join(r)), len(s))
+
+# decoding
+def modified_unbase64(s):
+    b = binascii.a2b_base64(s.replace(',', '/') + '===')
+    return unicode(b, 'utf-16be')
+
+def decoder(s):
+    r = []
+    decode = []
+    for c in s:
+        if c == '&' and not decode:
+            decode.append('&')
+        elif c == '-' and decode:
+            if len(decode) == 1:
+                r.append('&')
+            else:
+                r.append(modified_unbase64(''.join(decode[1:])))
+            decode = []
+        elif decode:
+            decode.append(c)
+        else:
+            r.append(c)
+
+    if decode:
+        r.append(modified_unbase64(''.join(decode[1:])))
+    bin_str = ''.join(r)
+    return (bin_str, len(s))
+
+class StreamReader(codecs.StreamReader):
+    def decode(self, s, errors='strict'):
+        return decoder(s)
+
+class StreamWriter(codecs.StreamWriter):
+    def decode(self, s, errors='strict'):
+        return encoder(s)
+
+def imap4_utf_7(name):
+    if name == 'imap4-utf-7':
+        return (encoder, decoder, StreamReader, StreamWriter)
+
+
+codecs.register(imap4_utf_7)

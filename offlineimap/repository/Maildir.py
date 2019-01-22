@@ -1,6 +1,5 @@
 # Maildir repository support
-# Copyright (C) 2002 John Goerzen
-# <jgoerzen@complete.org>
+# Copyright (C) 2002-2015 John Goerzen & contributors
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -27,20 +26,30 @@ class MaildirRepository(BaseRepository):
     def __init__(self, reposname, account):
         """Initialize a MaildirRepository object.  Takes a path name
         to the directory holding all the Maildir directories."""
+
         BaseRepository.__init__(self, reposname, account)
 
         self.root = self.getlocalroot()
         self.folders = None
         self.ui = getglobalui()
-        self.debug("MaildirRepository initialized, sep is " + repr(self.getsep()))
+        self.debug("MaildirRepository initialized, sep is %s"% repr(self.getsep()))
         self.folder_atimes = []
 
         # Create the top-level folder if it doesn't exist
         if not os.path.isdir(self.root):
-            os.mkdir(self.root, 0o700)
+            os.makedirs(self.root, 0o700)
+
+        # Create the keyword->char mapping
+        self.keyword2char = dict()
+        for c in 'abcdefghijklmnopqrstuvwxyz':
+            confkey = 'customflag_' + c
+            keyword = self.getconf(confkey, None)
+            if keyword is not None:
+                self.keyword2char[keyword] = c
 
     def _append_folder_atimes(self, foldername):
         """Store the atimes of a folder's new|cur in self.folder_atimes"""
+
         p = os.path.join(self.root, foldername)
         new = os.path.join(p, 'new')
         cur = os.path.join(p, 'cur')
@@ -51,6 +60,7 @@ class MaildirRepository(BaseRepository):
         """Sets folders' atime back to their values after a sync
 
         Controlled by the 'restoreatime' config parameter."""
+
         if not self.getconfboolean('restoreatime', False):
             return # not configured to restore
 
@@ -61,13 +71,17 @@ class MaildirRepository(BaseRepository):
             os.utime(cur_dir, (cur_atime, os.path.getmtime(cur_dir)))
 
     def getlocalroot(self):
-        return os.path.expanduser(self.getconf('localfolders'))
+        xforms = [os.path.expanduser, os.path.expandvars]
+        return self.getconf_xform('localfolders', xforms)
 
     def debug(self, msg):
         self.ui.debug('maildir', msg)
 
     def getsep(self):
         return self.getconf('sep', '.').strip()
+
+    def getkeywordmap(self):
+        return self.keyword2char if len(self.keyword2char) > 0 else None
 
     def makefolder(self, foldername):
         """Create new Maildir folder if necessary
@@ -81,6 +95,7 @@ class MaildirRepository(BaseRepository):
             levels will be created if they do not exist yet. 'cur',
             'tmp', and 'new' subfolders will be created in the maildir.
         """
+
         self.ui.makefolder(self, foldername)
         if self.account.dryrun:
             return
@@ -97,12 +112,12 @@ class MaildirRepository(BaseRepository):
 
         # If we're using hierarchical folders, it's possible that
         # sub-folders may be created before higher-up ones.
-        self.debug("makefolder: calling makedirs '%s'" % full_path)
+        self.debug("makefolder: calling makedirs '%s'"% full_path)
         try:
             os.makedirs(full_path, 0o700)
         except OSError as e:
             if e.errno == 17 and os.path.isdir(full_path):
-                self.debug("makefolder: '%s' already a directory" % foldername)
+                self.debug("makefolder: '%s' already a directory"% foldername)
             else:
                 raise
         for subdir in ['cur', 'new', 'tmp']:
@@ -110,13 +125,13 @@ class MaildirRepository(BaseRepository):
                 os.mkdir(os.path.join(full_path, subdir), 0o700)
             except OSError as e:
                 if e.errno == 17 and os.path.isdir(full_path):
-                    self.debug("makefolder: '%s' already has subdir %s" %
-                               (foldername, subdir))
+                    self.debug("makefolder: '%s' already has subdir %s"%
+                        (foldername, subdir))
                 else:
                     raise
 
     def deletefolder(self, foldername):
-        self.ui.warn("NOT YET IMPLEMENTED: DELETE FOLDER %s" % foldername)
+        self.ui.warn("NOT YET IMPLEMENTED: DELETE FOLDER %s"% foldername)
 
     def getfolder(self, foldername):
         """Return a Folder instance of this Maildir
@@ -124,22 +139,23 @@ class MaildirRepository(BaseRepository):
         If necessary, scan and cache all foldernames to make sure that
         we only return existing folders and that 2 calls with the same
         name will return the same object."""
+
         # getfolders() will scan and cache the values *if* necessary
         folders = self.getfolders()
-        for folder in folders:
-            if foldername == folder.name:
-                return folder
+        for f in folders:
+            if foldername == f.name:
+                return f
         raise OfflineImapError("getfolder() asked for a nonexisting "
-                               "folder '%s'." % foldername,
-                               OfflineImapError.ERROR.FOLDER)
+            "folder '%s'."% foldername, OfflineImapError.ERROR.FOLDER)
 
-    def _getfolders_scandir(self, root, extension = None):
+    def _getfolders_scandir(self, root, extension=None):
         """Recursively scan folder 'root'; return a list of MailDirFolder
 
         :param root: (absolute) path to Maildir root
         :param extension: (relative) subfolder to examine within root"""
-        self.debug("_GETFOLDERS_SCANDIR STARTING. root = %s, extension = %s" \
-                   % (root, extension))
+
+        self.debug("_GETFOLDERS_SCANDIR STARTING. root = %s, extension = %s"%
+                   (root, extension))
         retval = []
 
         # Configure the full path to this repository -- "toppath"
@@ -147,11 +163,11 @@ class MaildirRepository(BaseRepository):
             toppath = os.path.join(root, extension)
         else:
             toppath = root
-        self.debug("  toppath = %s" % toppath)
+        self.debug("  toppath = %s"% toppath)
 
         # Iterate over directories in top & top itself.
         for dirname in os.listdir(toppath) + ['']:
-            self.debug("  dirname = %s" % dirname)
+            self.debug("  dirname = %s"% dirname)
             if dirname == '' and extension is not None:
                 self.debug('  skip this entry (already scanned)')
                 continue
@@ -164,8 +180,8 @@ class MaildirRepository(BaseRepository):
                 self.debug("  skip this entry (not a directory)")
                 # Not a directory -- not a folder.
                 continue
+            # extension can be None.
             if extension:
-                # extension can be None which fails.
                 foldername = os.path.join(extension, dirname)
             else:
                 foldername = dirname
@@ -174,7 +190,7 @@ class MaildirRepository(BaseRepository):
                 os.path.isdir(os.path.join(fullname, 'new')) and
                 os.path.isdir(os.path.join(fullname, 'tmp'))):
                 # This directory has maildir stuff -- process
-                self.debug("  This is maildir folder '%s'." % foldername)
+                self.debug("  This is maildir folder '%s'."% foldername)
                 if self.getconfboolean('restoreatime', False):
                     self._append_folder_atimes(foldername)
                 fd = self.getfoldertype()(self.root, foldername,
@@ -184,7 +200,7 @@ class MaildirRepository(BaseRepository):
             if self.getsep() == '/' and dirname != '':
                 # Recursively check sub-directories for folders too.
                 retval.extend(self._getfolders_scandir(root, foldername))
-        self.debug("_GETFOLDERS_SCANDIR RETURNING %s" % \
+        self.debug("_GETFOLDERS_SCANDIR RETURNING %s"% \
                    repr([x.getname() for x in retval]))
         return retval
 
@@ -199,4 +215,5 @@ class MaildirRepository(BaseRepository):
     def forgetfolders(self):
         """Forgets the cached list of folders, if any.  Useful to run
         after a sync run."""
+
         self.folders = None

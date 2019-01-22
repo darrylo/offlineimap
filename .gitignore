@@ -1,10 +1,18 @@
-# Generated files
-/docs/dev-doc/
-/build/
-*.pyc
-offlineimap.1
-# backups
+# Editors/IDEs
 .*.swp
 .*.swo
-*.html
 *~
+tags
+
+# websites.
+/website/
+/wiki/
+
+# Generated files.
+/docs/dev-doc/
+/build/
+*.html
+*.css
+*.pyc
+offlineimap.1
+offlineimapui.7
